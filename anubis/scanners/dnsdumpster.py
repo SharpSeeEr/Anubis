@@ -1,45 +1,61 @@
 import re
-
 import requests
+from bs4 import BeautifulSoup
 
 
-def search_dnsdumpster(self, target):
-  print("Searching DNSDumpster")
-  headers = {'Pragma': 'no-cache', 'Origin': 'https://dnsdumpster.com',
-             'Accept-Encoding': 'gzip, deflate, br',
-             'Accept-Language': 'en-US,en;q=0.9,it;q=0.8',
-             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/62.0.3202.94 Safari/537.36',
-             'Content-Type': 'application/x-www-form-urlencoded',
-             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-             'Cache-Control': 'no-cache',
-             'Referer': 'https://dnsdumpster.com/',
-             'Connection': 'keep-alive', 'DNT': '1', }
+def search_dnsdumpster(self, target: str) -> None:
+    """
+    Searches DNSDumpster for subdomains of the given target domain.
 
-  get_csrf_res = requests.get('https://dnsdumpster.com', headers=headers)
+    Args:
+        self: The calling class instance, which maintains `self.domains`.
+        target (str): The target domain to search for.
 
-  try:
-    csrf_token = get_csrf_res.headers['Set-Cookie']
-    csrf_token = csrf_token[10:]
-    csrf_token = csrf_token.split(";")[0]
-  except Exception as e:
-    self.handle_exception(e, "Retrieving CSRF Token for DNSDumpster failed")
-    return
+    Returns:
+        None
+    """
+    print("Searching DNSDumpster")
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Referer': 'https://dnsdumpster.com/',
+    }
 
-  cookies = {'csrftoken': csrf_token, }
+    try:
+        # Start a session for automatic cookie handling
+        with requests.Session() as session:
+            # Step 1: Get the CSRF token
+            get_csrf_res = session.get('https://dnsdumpster.com', headers=headers, timeout=10)
+            get_csrf_res.raise_for_status()
 
-  data = [('csrfmiddlewaretoken', csrf_token), ('targetip', target), ('user', 'free')]
+            # Parse CSRF token from the HTML page
+            soup = BeautifulSoup(get_csrf_res.text, 'html.parser')
+            csrf_token_input = soup.find('input', {'name': 'csrfmiddlewaretoken'})
+            if not csrf_token_input:
+                raise ValueError("CSRF token not found on DNSDumpster page")
+            csrf_token = csrf_token_input['value']
 
-  res = requests.post('https://dnsdumpster.com/', headers=headers,
-                      cookies=cookies, data=data)
-  try:
-    scraped = res.text
-    subdomain_finder = re.compile('\">(.*\.' + target + ')<br>')
-    links = subdomain_finder.findall(scraped)
-    for domain in links:
-      if domain.strip() not in self.domains and domain.endswith("." + target):
-        self.domains.append(domain.strip())
-        if self.options["--verbose"]:
-          print("DNSDumpster Found Domain:", domain.strip())
-  except Exception as e:
-    self.handle_exception(e, "Error searching DNS Dumpster")
-    pass
+            # Step 2: Post target data with the CSRF token
+            data = {
+                'csrfmiddlewaretoken': csrf_token,
+                'targetip': target,
+                'user': 'free',
+            }
+            res = session.post('https://dnsdumpster.com/', headers=headers, data=data, timeout=20)
+            res.raise_for_status()
+
+            # Step 3: Extract subdomains from the response
+            soup = BeautifulSoup(res.text, 'html.parser')
+            subdomain_pattern = re.compile(r'(?:[a-z0-9-]+\.)*' + re.escape(target))
+            raw_links = soup.find_all(text=subdomain_pattern)
+
+            # Clean and deduplicate links
+            for domain in set(link.strip().lower() for link in raw_links if link.strip()):
+                if domain not in self.domains and domain.endswith(f".{target}"):
+                    self.domains.append(domain)
+                    if self.options.get("--verbose", False):
+                        print(f"DNSDumpster Found Domain: {domain}")
+
+    except requests.exceptions.RequestException as e:
+        self.handle_exception(e, "Error connecting to DNSDumpster")
+    except Exception as e:
+        self.handle_exception(e, "Error parsing DNSDumpster response")
