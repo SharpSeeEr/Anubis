@@ -97,11 +97,9 @@ class Target(Base):
         threads.append(threading.Thread(target=scan_host, args=(self, target)))
 
       # Start all threads and wait for them to finish
-      for x in threads:
-        x.start()
+      with ThreadPoolExecutor(max_workers=10) as executor:
+        executor.map(lambda thread: thread.run(), threads)
 
-      for x in threads:
-        x.join()
 
       # Run a recursive search on each subdomain - rarely useful, but nice to have
       # just in case
@@ -151,28 +149,37 @@ class Target(Base):
       if ip:
         ColorPrint.green(ip)
 
-  @staticmethod
-  def clean_domains(domains):
+@staticmethod
+def clean_domains(domains):
+    """
+    Cleans and normalizes a list of domain strings.
+
+    Args:
+        domains (list): List of raw subdomain strings.
+
+    Returns:
+        list: Cleaned and normalized subdomain strings.
+    """
     cleaned = []
     for subdomain in domains:
-      subdomain = subdomain.lower()
-      if subdomain.find("//") != -1:
-        subdomain = subdomain[subdomain.find("//") + 2:]
-      # Some pkey return instances like example.com. - remove the final .
-      if subdomain.endswith('.'):
-        subdomain = subdomain[:-1]
-      # sometimes we'll get something like /www.example.com
-      if subdomain[0] in ["\\", ".", "/", "#", "$", "%"]:
-        subdomain = subdomain[1:]
-      # If it's an email address, only take the domain part
-      if "@" in subdomain:
-        subdomain = subdomain.split("@")
-        # If it's an actual email like mail@example.com, take example.com
-        if len(subdomain) > 1:
-          subdomain = subdomain[1]
-        else:
-          # If for some reason it's example.com@, take example.com
-          subdomain = subdomain[0]
+        subdomain = subdomain.lower()
 
-      cleaned.append(subdomain.strip())
+        # Remove protocol prefix (http:// or https://)
+        if "//" in subdomain:
+            subdomain = subdomain.split("//", 1)[-1]
+
+        # Remove trailing dot (e.g., 'example.com.')
+        if subdomain.endswith('.'):
+            subdomain = subdomain[:-1]
+
+        # Remove leading special characters (e.g., '/www.example.com')
+        while subdomain and subdomain[0] in ["\\", ".", "/", "#", "$", "%"]:
+            subdomain = subdomain[1:]
+
+        # Handle email addresses (e.g., 'user@example.com')
+        if "@" in subdomain:
+            subdomain = subdomain.split("@")[-1]
+
+        cleaned.append(subdomain.strip())
     return cleaned
+
